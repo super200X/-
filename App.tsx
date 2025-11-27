@@ -31,6 +31,7 @@ const App: React.FC = () => {
       typeof process !== 'undefined' && process.env && process.env.API_KEY ? process.env.API_KEY : ''
   );
   const [showRateLimitModal, setShowRateLimitModal] = useState<boolean>(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
   const [retryStartIndex, setRetryStartIndex] = useState<number>(0);
   const [newKeyInput, setNewKeyInput] = useState<string>('');
 
@@ -148,7 +149,7 @@ const App: React.FC = () => {
     
     // Check if we have a key (either from env or manually set)
     if (!currentApiKey) {
-        alert("系统错误：未配置 API Key。");
+        setShowApiKeyModal(true);
         return;
     }
 
@@ -272,6 +273,13 @@ const App: React.FC = () => {
       // Resume processing from the saved index
       startProcessing(retryStartIndex);
   };
+  
+  const handleSaveInitialKey = () => {
+      if (!newKeyInput.trim()) return;
+      setCurrentApiKey(newKeyInput.trim());
+      setShowApiKeyModal(false);
+      setNewKeyInput('');
+  };
 
   const handleRegenerateScene = async (sceneId: number) => {
     if (!currentApiKey) return;
@@ -366,7 +374,7 @@ const App: React.FC = () => {
   // 1. Editor View
   if (processing.stage === 'idle') {
     return (
-      <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
+      <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden relative">
         {/* Web Header */}
         <header className="bg-indigo-900 text-white h-16 shrink-0 shadow-lg flex justify-between items-center px-6 z-10 relative">
             <div className="flex items-center gap-4">
@@ -394,6 +402,17 @@ const App: React.FC = () => {
                     onChange={handleLoadingVideoSelect}
                 />
                 
+                <button 
+                  onClick={() => setShowApiKeyModal(true)}
+                  className="text-indigo-200 hover:text-white p-2 rounded hover:bg-indigo-800 transition-colors"
+                  title="配置 API Key"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </button>
+
                 <button 
                   onClick={() => loadingVideoInputRef.current?.click()}
                   className="bg-indigo-800 hover:bg-indigo-700 text-indigo-200 hover:text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-2"
@@ -443,6 +462,47 @@ const App: React.FC = () => {
                 </button>
             </div>
         </header>
+
+        {/* API Key Modal (Initial Setup or Change) */}
+        {showApiKeyModal && (
+          <div className="absolute inset-0 z-50 bg-black/60 flex items-center justify-center backdrop-blur-sm">
+            <div className="bg-white rounded-lg shadow-2xl p-6 w-full max-w-md animate-bounce-in">
+              <h3 className="text-xl font-bold text-gray-800 mb-4">配置 Google AI API Key</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                本应用运行在您的浏览器本地，不会上传您的数据。您需要提供自己的 Google API Key 才能调用 Gemini 模型。
+              </p>
+              <div className="mb-4">
+                <input 
+                  type="password"
+                  className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="粘贴您的 API Key (AI Studio)"
+                  value={newKeyInput}
+                  onChange={(e) => setNewKeyInput(e.target.value)}
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                 <button 
+                    onClick={() => setShowApiKeyModal(false)}
+                    className="text-gray-500 hover:text-gray-700 px-3 py-2 text-sm"
+                 >
+                    取消
+                 </button>
+                 <button 
+                    onClick={handleSaveInitialKey}
+                    disabled={!newKeyInput.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md font-medium transition-colors"
+                 >
+                    保存并继续
+                 </button>
+              </div>
+              <div className="mt-4 text-xs text-gray-400 text-center">
+                 API Key 仅保存在内存中，刷新页面后需重新输入。
+                 <br />
+                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">获取 API Key →</a>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main Workspace */}
         <main className="flex-1 overflow-hidden relative flex flex-col items-center">

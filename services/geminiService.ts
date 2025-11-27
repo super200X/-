@@ -2,7 +2,11 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { GeneratedScene } from "../types";
 
 // Helper to get client with dynamic key
-const getAiClient = (apiKey: string) => new GoogleGenAI({ apiKey: apiKey || process.env.API_KEY });
+const getAiClient = (apiKey: string) => {
+    // Safely access env var or use passed key
+    const envKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
+    return new GoogleGenAI({ apiKey: apiKey || envKey });
+};
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 

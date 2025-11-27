@@ -26,7 +26,10 @@ const App: React.FC = () => {
   const [finalResult, setFinalResult] = useState<RenderedResult | null>(null);
   
   // API Key State Management
-  const [currentApiKey, setCurrentApiKey] = useState<string>(process.env.API_KEY || '');
+  // Safe access for process.env to avoid ReferenceError in browser
+  const [currentApiKey, setCurrentApiKey] = useState<string>(
+      typeof process !== 'undefined' && process.env && process.env.API_KEY ? process.env.API_KEY : ''
+  );
   const [showRateLimitModal, setShowRateLimitModal] = useState<boolean>(false);
   const [retryStartIndex, setRetryStartIndex] = useState<number>(0);
   const [newKeyInput, setNewKeyInput] = useState<string>('');

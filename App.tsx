@@ -29,6 +29,11 @@ const App: React.FC = () => {
   const [currentApiKey, setCurrentApiKey] = useState<string>(
       typeof process !== 'undefined' && process.env && process.env.API_KEY ? process.env.API_KEY : ''
   );
+  
+  // Base URL / Provider State
+  const [apiProvider, setApiProvider] = useState<'official' | 'newcoin' | 'custom'>('official');
+  const [customBaseUrl, setCustomBaseUrl] = useState<string>('');
+
   const [showRateLimitModal, setShowRateLimitModal] = useState<boolean>(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
   const [retryStartIndex, setRetryStartIndex] = useState<number>(0);
@@ -46,6 +51,13 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Determine effective base URL
+  const getEffectiveBaseUrl = () => {
+      if (apiProvider === 'newcoin') return 'https://api.newcoin.top';
+      if (apiProvider === 'custom') return customBaseUrl;
+      return ''; // Official
+  };
 
   // Effect to verify video path on mount
   useEffect(() => {
@@ -147,6 +159,9 @@ const App: React.FC = () => {
         setShowApiKeyModal(true);
         return;
     }
+    
+    const baseUrl = getEffectiveBaseUrl();
+
     if (resumeFromIndex === 0) {
         setProcessing({
           stage: 'analyzing',
@@ -164,7 +179,7 @@ const App: React.FC = () => {
       let plannedScenes: GeneratedScene[] = [];
       if (resumeFromIndex === 0) {
           try {
-              plannedScenes = await analyzeStoryText(markdownText, currentApiKey);
+              plannedScenes = await analyzeStoryText(markdownText, currentApiKey, baseUrl);
               setScenes(plannedScenes);
               setProcessing({
                 stage: 'generating',
@@ -197,7 +212,7 @@ const App: React.FC = () => {
         }));
 
         try {
-          const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id);
+          const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, false, 1, baseUrl);
           updatedScenes[i] = { ...scene, status: 'completed', imageUrl };
         } catch (e: any) {
           console.error(e);
@@ -251,7 +266,8 @@ const App: React.FC = () => {
     newScenes[sceneIndex] = { ...scene, status: 'generating' };
     setScenes(newScenes);
     try {
-        const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, true);
+        const baseUrl = getEffectiveBaseUrl();
+        const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, true, 1, baseUrl);
         newScenes[sceneIndex] = { ...scene, status: 'completed', imageUrl };
     } catch (e: any) {
         console.error("Regeneration failed:", e);
@@ -330,16 +346,39 @@ const App: React.FC = () => {
         {showApiKeyModal && (
           <div className="absolute inset-0 z-50 bg-black/60 flex items-center justify-center backdrop-blur-sm">
             <div className="bg-white rounded-lg shadow-2xl p-6 w-full max-w-md animate-bounce-in">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">配置 Google AI API Key</h3>
-              <p className="text-sm text-gray-500 mb-4">本应用运行在您的浏览器本地，不会上传您的数据。您需要提供自己的 Google API Key 才能调用 Gemini 模型。</p>
+              <h3 className="text-xl font-bold text-gray-800 mb-4">配置 API 访问</h3>
+              <p className="text-sm text-gray-500 mb-4">您可以选择直连 Google 官方接口，或使用 NewCoin 等中转服务来规避网络限制。</p>
+              
               <div className="mb-4">
-                <input type="password" className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="粘贴您的 API Key (AI Studio)" value={newKeyInput} onChange={(e) => setNewKeyInput(e.target.value)} />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">API 线路</label>
+                  <select 
+                    value={apiProvider} 
+                    onChange={(e) => setApiProvider(e.target.value as any)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  >
+                      <option value="official">Google 官方直连 (默认)</option>
+                      <option value="newcoin">NewCoin 中转 (国内推荐)</option>
+                      <option value="custom">自定义代理地址</option>
+                  </select>
               </div>
-              <div className="flex justify-end gap-3">
+
+              {apiProvider === 'custom' && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                    <input type="text" className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="https://..." value={customBaseUrl} onChange={(e) => setCustomBaseUrl(e.target.value)} />
+                  </div>
+              )}
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                <input type="password" className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="粘贴 API Key" value={newKeyInput} onChange={(e) => setNewKeyInput(e.target.value)} />
+                {apiProvider === 'newcoin' && <p className="text-xs text-indigo-500 mt-1">NewCoin 模式下请使用 NewCoin 提供的令牌</p>}
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
                  <button onClick={() => setShowApiKeyModal(false)} className="text-gray-500 hover:text-gray-700 px-3 py-2 text-sm">取消</button>
-                 <button onClick={handleSaveInitialKey} disabled={!newKeyInput.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md font-medium transition-colors">保存并继续</button>
+                 <button onClick={handleSaveInitialKey} disabled={!newKeyInput.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md font-medium transition-colors">保存配置</button>
               </div>
-              <div className="mt-4 text-xs text-gray-400 text-center">API Key 仅保存在内存中，刷新页面后需重新输入。<br /><a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">获取 API Key →</a></div>
             </div>
           </div>
         )}

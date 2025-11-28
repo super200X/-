@@ -2,15 +2,20 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { GeneratedScene } from "../types";
 
 // Helper to get client with dynamic key and custom Base URL
-const getAiClient = (apiKey: string) => {
+const getAiClient = (apiKey: string, baseUrl?: string) => {
     // Safely access env var or use passed key
     const envKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
     
-    return new GoogleGenAI({ 
-        apiKey: apiKey || envKey,
-        // Set the custom base URL for the third-party provider
-        baseUrl: 'https://api.newcoin.top'
-    });
+    const config: any = { 
+        apiKey: apiKey || envKey
+    };
+
+    // Only set baseUrl if provided and not empty
+    if (baseUrl && baseUrl.trim().length > 0) {
+        config.baseUrl = baseUrl;
+    }
+    
+    return new GoogleGenAI(config);
 };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -76,8 +81,8 @@ const sceneSchema: Schema = {
   },
 };
 
-export const analyzeStoryText = async (fullText: string, apiKey: string): Promise<GeneratedScene[]> => {
-  const ai = getAiClient(apiKey);
+export const analyzeStoryText = async (fullText: string, apiKey: string, baseUrl?: string): Promise<GeneratedScene[]> => {
+  const ai = getAiClient(apiKey, baseUrl);
   
   try {
     const response = await ai.models.generateContent({
@@ -192,8 +197,8 @@ const compressImage = async (base64Str: string, maxSizeBytes: number, maxWidth: 
     });
 };
 
-export const generateImageForScene = async (prompt: string, apiKey: string, sceneId: number, isRetry: boolean = false, attempt: number = 1): Promise<string> => {
-  const ai = getAiClient(apiKey);
+export const generateImageForScene = async (prompt: string, apiKey: string, sceneId: number, isRetry: boolean = false, attempt: number = 1, baseUrl?: string): Promise<string> => {
+  const ai = getAiClient(apiKey, baseUrl);
   
   // Determine compression targets based on Scene ID
   // Scene 1 (Cover/Intro): High Quality (Max 300KB, 1280px width)
@@ -264,7 +269,7 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
              if (!isRetry) {
                  // Attempt 2: Try Sanitized Prompt
                  console.warn(`Safety filter (${reason}) triggered. Retrying with sanitized prompt...`);
-                 return await generateImageForScene(prompt, apiKey, sceneId, true);
+                 return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
              } else {
                  // Attempt 3: Ultra Safe Fallback
                  const ultraSafePrompt = "Abstract cinematic composition, soft lighting, asian style, emotional atmosphere, blurry background";
@@ -272,7 +277,7 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
                  // Avoid infinite loop if we are already using the ultra safe prompt
                  if (!prompt.includes("Abstract cinematic composition")) {
                     console.warn(`Sanitized prompt also failed (${reason}). Retrying with ULTRA SAFE fallback...`);
-                    return await generateImageForScene(ultraSafePrompt, apiKey, sceneId, true);
+                    return await generateImageForScene(ultraSafePrompt, apiKey, sceneId, true, 1, baseUrl);
                  }
              }
         }
@@ -292,7 +297,7 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
     // Fallback: If no image data but we haven't retried yet
     if (!isRetry) {
          console.warn("No image data found. Retrying with sanitized prompt...");
-         return await generateImageForScene(prompt, apiKey, sceneId, true);
+         return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
     }
     
     throw new Error("No image data found in response");
@@ -316,7 +321,7 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
     // Catch-all for permission or 400 errors that might be content related
     if (!isRetry && (error.message?.includes('SAFETY') || error.message?.includes('PERMISSION_DENIED') || error.message?.includes('400') || error.message?.includes('403'))) {
          console.warn("Safety/Permission/API error caught. Retrying with sanitized prompt...");
-         return await generateImageForScene(prompt, apiKey, sceneId, true);
+         return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
     }
 
     console.error("Image generation failed:", error);

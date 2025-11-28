@@ -41,11 +41,9 @@ const App: React.FC = () => {
   // Improved default path strategy: try relative first for broader compatibility
   const [loadingVideoSrc, setLoadingVideoSrc] = useState<string | null>('loading.mp4');
   const [isVideoMissing, setIsVideoMissing] = useState<boolean>(false);
-  const [previewLoading, setPreviewLoading] = useState<boolean>(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const loadingVideoInputRef = useRef<HTMLInputElement>(null);
 
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -137,16 +135,6 @@ const App: React.FC = () => {
     };
     reader.readAsArrayBuffer(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleLoadingVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-        const url = URL.createObjectURL(file);
-        setLoadingVideoSrc(url);
-        setIsVideoMissing(false);
-    }
-    if (loadingVideoInputRef.current) loadingVideoInputRef.current.value = '';
   };
 
   const triggerFileUpload = () => {
@@ -307,7 +295,7 @@ const App: React.FC = () => {
   };
 
   // 1. Editor View
-  if (processing.stage === 'idle' && !previewLoading) {
+  if (processing.stage === 'idle') {
     return (
       <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden relative">
         <header className="bg-indigo-900 text-white h-16 shrink-0 shadow-lg flex justify-between items-center px-6 z-10 relative">
@@ -317,25 +305,10 @@ const App: React.FC = () => {
             </div>
             <div className="flex items-center gap-3">
                 <input type="file" ref={fileInputRef} className="hidden" accept=".docx,.doc" onChange={handleFileSelect} />
-                <input type="file" ref={loadingVideoInputRef} className="hidden" accept="video/*" onChange={handleLoadingVideoSelect} />
                 
                 <button onClick={() => setShowApiKeyModal(true)} className="text-indigo-200 hover:text-white p-2 rounded hover:bg-indigo-800 transition-colors" title="配置 API Key">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 </button>
-
-                {/* Video Settings Group */}
-                <div className="flex items-center bg-indigo-800 rounded-md p-1 gap-1">
-                   <button onClick={() => loadingVideoInputRef.current?.click()} className="text-indigo-200 hover:text-white px-2 py-1 rounded hover:bg-indigo-700 text-xs flex items-center gap-1">
-                      <span>🎬</span><span className="hidden sm:inline">选择视频</span>
-                   </button>
-                   <button 
-                      onClick={() => setPreviewLoading(true)} 
-                      className="text-indigo-200 hover:text-white px-2 py-1 rounded hover:bg-indigo-700 text-xs border-l border-indigo-700"
-                      title="预览加载动画"
-                   >
-                      👁️
-                   </button>
-                </div>
 
                 <button onClick={triggerFileUpload} className="bg-indigo-800 hover:bg-indigo-700 text-indigo-100 px-3 py-1.5 rounded-md text-xs font-medium transition-all border border-indigo-700 hover:border-indigo-500 flex items-center gap-2">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -430,11 +403,7 @@ const App: React.FC = () => {
   // 3. Loading View (Generating / Analyzing / Previewing)
   return (
     <div className="h-screen w-full bg-gray-900 text-white flex flex-col items-center justify-center p-8 relative overflow-hidden">
-      {previewLoading && (
-         <button onClick={() => setPreviewLoading(false)} className="absolute top-8 right-8 z-50 bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full text-sm">✖ 关闭预览</button>
-      )}
-
-      {showRateLimitModal && !previewLoading && (
+      {showRateLimitModal && (
           <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center backdrop-blur-sm">
               <div className="bg-white text-gray-900 p-8 rounded-lg shadow-2xl max-w-md w-full animate-bounce-in">
                   <div className="flex items-center gap-3 text-red-600 mb-4">
@@ -463,7 +432,7 @@ const App: React.FC = () => {
       <div className="z-10 text-center max-w-2xl w-full">
         <div className="mb-10">
           {loadingVideoSrc && !isVideoMissing ? (
-            <div className="mb-8 relative mx-auto w-64 aspect-[9/16] md:aspect-video md:w-80 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-500/50 border-4 border-indigo-500/20 bg-black">
+            <div className="mb-8 relative mx-auto w-64 aspect-square md:w-80 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-500/50 border-4 border-indigo-500/20 bg-black">
                 <video 
                     src={loadingVideoSrc} 
                     autoPlay 
@@ -472,6 +441,7 @@ const App: React.FC = () => {
                     playsInline 
                     className="w-full h-full object-cover"
                     onError={() => { setIsVideoMissing(true); }}
+                    key={loadingVideoSrc} 
                 />
             </div>
           ) : (
@@ -479,11 +449,7 @@ const App: React.FC = () => {
                 <div className="w-20 h-20 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-lg shadow-indigo-500/50"></div>
                 {/* Fallback Message for missing video */}
                 <div className="text-xs text-indigo-300 bg-indigo-900/50 px-4 py-2 rounded-lg border border-indigo-500/30 max-w-xs">
-                   提示: 找不到 loading.mp4。请上传视频或将文件放置于 public 目录中。
-                   <br/>
-                   <button onClick={() => loadingVideoInputRef.current?.click()} className="mt-2 text-white underline hover:text-indigo-200 font-bold">
-                       点击此处选择文件
-                   </button>
+                   提示: 找不到 loading.mp4。请确保文件在 public 目录中。
                 </div>
             </div>
           )}
@@ -493,22 +459,20 @@ const App: React.FC = () => {
           {cooldownTime > 0 ? (
              <div className="text-xl text-yellow-400 animate-pulse font-light">API 冷却中 (等待免费配额重置)... {cooldownTime}s</div>
           ) : (
-             <p className="text-xl text-gray-300 animate-pulse font-light">{previewLoading ? "预览模式：检查加载动画效果" : processing.progressMessage}</p>
+             <p className="text-xl text-gray-300 animate-pulse font-light">{processing.progressMessage}</p>
           )}
         </div>
 
-        {!previewLoading && processing.totalScenes > 0 && (
+        {processing.totalScenes > 0 && (
             <div className="w-full bg-gray-800 rounded-full h-3 mb-4 overflow-hidden shadow-inner border border-gray-700">
                 <div className="bg-gradient-to-r from-indigo-500 to-purple-500 h-3 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]" style={{ width: `${Math.round((processing.completedScenes / processing.totalScenes) * 100)}%` }}></div>
             </div>
         )}
-        {!previewLoading && (
-            <div className="flex justify-between text-xs text-gray-500 uppercase tracking-widest font-semibold">
-                <span className={processing.stage === 'analyzing' ? 'text-indigo-400' : ''}>剧本分析</span>
-                <span className={processing.stage === 'generating' ? 'text-indigo-400' : ''}>视觉生成</span>
-                <span className={processing.stage === 'complete' ? 'text-indigo-400' : ''}>排版布局</span>
-            </div>
-        )}
+        <div className="flex justify-between text-xs text-gray-500 uppercase tracking-widest font-semibold">
+            <span className={processing.stage === 'analyzing' ? 'text-indigo-400' : ''}>剧本分析</span>
+            <span className={processing.stage === 'generating' ? 'text-indigo-400' : ''}>视觉生成</span>
+            <span className={processing.stage === 'complete' ? 'text-indigo-400' : ''}>排版布局</span>
+        </div>
       </div>
     </div>
   );

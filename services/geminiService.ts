@@ -1,11 +1,16 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { GeneratedScene } from "../types";
 
-// Helper to get client with dynamic key
+// Helper to get client with dynamic key and custom Base URL
 const getAiClient = (apiKey: string) => {
     // Safely access env var or use passed key
     const envKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
-    return new GoogleGenAI({ apiKey: apiKey || envKey });
+    
+    return new GoogleGenAI({ 
+        apiKey: apiKey || envKey,
+        // Set the custom base URL for the third-party provider
+        baseUrl: 'https://api.newcoin.top'
+    });
 };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -295,18 +300,16 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
   } catch (error: any) {
     // RATE LIMIT HANDLING (429 / Resource Exhausted)
     // We explicitly re-throw specific status codes so App.tsx can intercept them for Key Switching
+    // Note: Proxies might return 429 differently, but standard codes usually apply
     if (error.status === 'RESOURCE_EXHAUSTED' || error.code === 429 || (error.message && error.message.includes('429'))) {
-        if (attempt <= 3) {
-            // Limited internal retry (reduced to 3 to fail faster and let user switch key)
-            const delayTime = 5000 * Math.pow(1.5, attempt - 1); 
-            console.warn(`Rate limit hit (429). Waiting ${delayTime/1000}s before retry attempt ${attempt}...`);
-            await wait(delayTime);
-            return await generateImageForScene(prompt, apiKey, sceneId, isRetry, attempt + 1);
-        } else {
-             // Throw specific error for App to catch
-             const quotaError = new Error("QUOTA_EXCEEDED");
-             (quotaError as any).code = 429;
-             throw quotaError;
+        // With proxies, internal retry logic might be less effective if the key is truly out of credits
+        // But we keep the logic just in case it's a momentary spike
+        if (attempt <= 1) { // Reduced retries for proxy to allow faster key switching
+            console.warn(`Rate limit hit (429). Waiting before retry attempt ${attempt}...`);
+            // Immediate throw for UI handling to allow key switch, as proxies usually mean "out of money" on 429
+            const quotaError = new Error("QUOTA_EXCEEDED");
+            (quotaError as any).code = 429;
+            throw quotaError;
         }
     }
 

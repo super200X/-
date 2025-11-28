@@ -43,7 +43,6 @@ const App: React.FC = () => {
   const [cooldownTime, setCooldownTime] = useState<number>(0);
 
   // Loading Video State
-  // Improved default path strategy: try relative first for broader compatibility
   const [loadingVideoSrc, setLoadingVideoSrc] = useState<string | null>('loading.mp4');
   const [isVideoMissing, setIsVideoMissing] = useState<boolean>(false);
 
@@ -61,30 +60,7 @@ const App: React.FC = () => {
 
   // Effect to verify video path on mount
   useEffect(() => {
-     // Check if the default video exists by trying to fetch head
-     fetch('loading.mp4', { method: 'HEAD' })
-        .then(res => {
-            if (res.ok) {
-                setLoadingVideoSrc('loading.mp4');
-                setIsVideoMissing(false);
-            } else {
-                // Try absolute path if relative fails
-                fetch('/loading.mp4', { method: 'HEAD' })
-                    .then(res2 => {
-                        if (res2.ok) {
-                            setLoadingVideoSrc('/loading.mp4');
-                            setIsVideoMissing(false);
-                        } else {
-                            setIsVideoMissing(true);
-                        }
-                    })
-                    .catch(() => setIsVideoMissing(true));
-            }
-        })
-        .catch(() => {
-             // Network error or blocked, try generic path anyway
-             setLoadingVideoSrc('loading.mp4');
-        });
+     setLoadingVideoSrc('loading.mp4');
   }, []);
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -179,6 +155,9 @@ const App: React.FC = () => {
       let plannedScenes: GeneratedScene[] = [];
       if (resumeFromIndex === 0) {
           try {
+              // Analysis always uses Google SDK protocol (NewCoin supports this for text)
+              // Note: NewCoin's /v1/chat/completions is specific for image gen, standard text gen usually works with SDK if baseUrl is set
+              // If analysis fails with NewCoin via SDK, we might need to switch it too, but usually text works.
               plannedScenes = await analyzeStoryText(markdownText, currentApiKey, baseUrl);
               setScenes(plannedScenes);
               setProcessing({
@@ -212,7 +191,8 @@ const App: React.FC = () => {
         }));
 
         try {
-          const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, false, 1, baseUrl);
+          // Pass apiProvider to generateImageForScene to choose correct method
+          const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, false, 1, baseUrl, apiProvider);
           updatedScenes[i] = { ...scene, status: 'completed', imageUrl };
         } catch (e: any) {
           console.error(e);
@@ -267,7 +247,8 @@ const App: React.FC = () => {
     setScenes(newScenes);
     try {
         const baseUrl = getEffectiveBaseUrl();
-        const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, true, 1, baseUrl);
+        // Pass apiProvider to regenerate as well
+        const imageUrl = await generateImageForScene(scene.visualPrompt, currentApiKey, scene.id, true, 1, baseUrl, apiProvider);
         newScenes[sceneIndex] = { ...scene, status: 'completed', imageUrl };
     } catch (e: any) {
         console.error("Regeneration failed:", e);
@@ -357,7 +338,7 @@ const App: React.FC = () => {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                   >
                       <option value="official">Google 官方直连 (默认)</option>
-                      <option value="newcoin">NewCoin 中转 (国内推荐)</option>
+                      <option value="newcoin">NewCoin 中转 (OpenAI 兼容)</option>
                       <option value="custom">自定义代理地址</option>
                   </select>
               </div>
@@ -372,7 +353,7 @@ const App: React.FC = () => {
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
                 <input type="password" className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="粘贴 API Key" value={newKeyInput} onChange={(e) => setNewKeyInput(e.target.value)} />
-                {apiProvider === 'newcoin' && <p className="text-xs text-indigo-500 mt-1">NewCoin 模式下请使用 NewCoin 提供的令牌</p>}
+                {apiProvider === 'newcoin' && <p className="text-xs text-indigo-500 mt-1">NewCoin 模式下请使用 NewCoin 提供的令牌 (sk-...)</p>}
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
@@ -383,138 +364,191 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <main className="flex-1 overflow-hidden relative flex flex-col items-center">
-            <div className="w-full max-w-5xl h-full bg-white shadow-xl flex flex-col border-x border-gray-200 overflow-hidden">
-                <div className="bg-gray-50 border-b border-gray-100 px-8 py-2 text-xs text-gray-400 flex justify-between">
-                    <span>支持 Markdown, 富文本 和 .docx 文档</span><span>{markdownText.length} 字</span>
+        <main className="flex-1 flex overflow-hidden">
+            {/* Left Panel: Editor */}
+            <div className={`flex-1 flex flex-col transition-all duration-500 ${inputMode === 'edit' ? 'translate-x-0' : '-translate-x-full hidden'}`}>
+                <div className="flex-1 p-4 md:p-8 overflow-auto bg-gray-100 flex justify-center">
+                    <div className="w-full max-w-3xl h-full flex flex-col">
+                         <div className="bg-white rounded-t-lg border-b border-gray-200 px-4 py-2 flex justify-between items-center shadow-sm">
+                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Markdown 编辑器</span>
+                            <span className="text-xs text-gray-400">支持粘贴富文本 (Word/网页)</span>
+                         </div>
+                        <textarea
+                            ref={textareaRef}
+                            className="flex-1 w-full p-6 md:p-10 bg-white text-gray-800 text-lg leading-relaxed resize-none focus:outline-none shadow-sm rounded-b-lg font-serif"
+                            placeholder="请在此粘贴您的小说或文章全文..."
+                            value={markdownText}
+                            onChange={(e) => setMarkdownText(e.target.value)}
+                            onPaste={handlePaste}
+                        />
+                    </div>
                 </div>
-                {inputMode === 'edit' ? (
-                  <textarea ref={textareaRef} className="flex-1 w-full p-12 text-lg font-mono text-gray-800 resize-none focus:outline-none leading-relaxed" placeholder="# 文章标题\n\n## 引言\n在此粘贴您的故事或上传 .docx 文件..." value={markdownText} onChange={(e) => setMarkdownText(e.target.value)} onPaste={handlePaste} />
-                ) : (
-                  <div className="flex-1 w-full overflow-y-auto bg-white p-12">
-                     <div className="prose prose-lg prose-indigo max-w-none font-serif text-gray-800 leading-loose">
-                        <div dangerouslySetInnerHTML={{ __html: window.marked ? window.marked.parse(markdownText) : markdownText }} />
-                     </div>
-                  </div>
-                )}
+            </div>
+
+            {/* Right Panel: Preview */}
+            <div className={`flex-1 bg-gray-100 overflow-auto transition-all duration-500 flex flex-col items-center ${inputMode === 'preview' ? 'w-full' : 'hidden w-0'}`}>
+               <div className="w-full max-w-3xl my-8">
+                   <ArticlePreview 
+                      fullText={markdownText || "# 预览模式\n\n请在左侧编辑器输入内容..."} 
+                      scenes={[]} // No scenes in idle preview
+                      onResultReady={() => {}}
+                      onRegenerate={() => {}}
+                   />
+               </div>
             </div>
         </main>
       </div>
     );
   }
 
-  if (processing.stage === 'complete') {
+  // 2. Processing / Loading View
+  if (processing.stage !== 'complete' && processing.stage !== 'idle') {
+    return (
+      <div className="h-screen w-full bg-gray-900 flex flex-col items-center justify-center relative overflow-hidden">
+        {/* Background Elements */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 opacity-20">
+            <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-purple-600 rounded-full mix-blend-multiply filter blur-xl animate-blob"></div>
+            <div className="absolute top-1/3 right-1/4 w-64 h-64 bg-indigo-600 rounded-full mix-blend-multiply filter blur-xl animate-blob animation-delay-2000"></div>
+            <div className="absolute bottom-1/4 left-1/3 w-64 h-64 bg-pink-600 rounded-full mix-blend-multiply filter blur-xl animate-blob animation-delay-4000"></div>
+        </div>
+
+        <div className="z-10 text-center px-4 flex flex-col items-center">
+           <div className="mb-8 relative">
+                <div className="w-64 md:w-80 aspect-square rounded-2xl overflow-hidden shadow-2xl border-4 border-indigo-500/30 relative bg-black">
+                    <video 
+                        key={loadingVideoSrc}
+                        src={loadingVideoSrc || undefined}
+                        autoPlay 
+                        loop 
+                        muted 
+                        playsInline 
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                            console.error("Video load failed", e);
+                            setIsVideoMissing(true);
+                        }}
+                    />
+                     {/* Fallback Spinner if video missing */}
+                    {(isVideoMissing || !loadingVideoSrc) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    )}
+                    
+                    {/* Countdown Overlay */}
+                    {cooldownTime > 0 && (
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center text-white z-20">
+                            <div className="text-4xl font-bold mb-2 font-mono">{cooldownTime}s</div>
+                            <div className="text-sm text-indigo-200">API 冷却中...</div>
+                        </div>
+                    )}
+                </div>
+           </div>
+          
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">我知道你很急但是先别急</h2>
+          <div className="h-1.5 w-64 bg-gray-700 rounded-full overflow-hidden mb-4">
+             <div 
+               className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
+               style={{ width: `${processing.totalScenes > 0 ? (processing.completedScenes / processing.totalScenes) * 100 : 5}%` }}
+             ></div>
+          </div>
+          <p className="text-indigo-200 text-lg animate-pulse">{processing.progressMessage}</p>
+          <div className="mt-8 flex gap-4 text-sm text-gray-400">
+             <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${processing.stage === 'analyzing' ? 'bg-yellow-400 animate-ping' : 'bg-gray-600'}`}></span>
+                <span>剧情分析</span>
+             </div>
+             <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${processing.stage === 'generating' ? 'bg-green-400 animate-ping' : 'bg-gray-600'}`}></span>
+                <span>视觉生成</span>
+             </div>
+             <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${processing.stage === 'complete' ? 'bg-blue-400' : 'bg-gray-600'}`}></span>
+                <span>图文合成</span>
+             </div>
+          </div>
+        </div>
+
+        {/* Rate Limit Rescue Modal */}
+        {showRateLimitModal && (
+            <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-2xl">
+                    <div className="text-center mb-4">
+                        <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 mb-4">
+                            <svg className="h-6 w-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        </div>
+                        <h3 className="text-lg leading-6 font-medium text-gray-900">API 配额耗尽 (429)</h3>
+                        <p className="text-sm text-gray-500 mt-2">
+                            当前的 API Key 已达到速率限制。您可以输入一个新的 Key 来继续生成，程序将从中断的地方继续。
+                        </p>
+                    </div>
+                    <div className="mt-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">新的 API Key</label>
+                        <input 
+                            type="password" 
+                            className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                            placeholder="sk-..."
+                            value={newKeyInput}
+                            onChange={(e) => setNewKeyInput(e.target.value)}
+                        />
+                    </div>
+                    <div className="mt-6 flex gap-3">
+                        <button
+                            onClick={() => setShowRateLimitModal(false)} // Just close to wait
+                            className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded hover:bg-gray-200 transition-colors"
+                        >
+                            稍后重试
+                        </button>
+                        <button
+                            onClick={handleResumeWithNewKey}
+                            disabled={!newKeyInput.trim()}
+                            className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 disabled:bg-indigo-400 transition-colors shadow-md"
+                        >
+                            更换并继续
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
+    );
+  }
+
+  // 3. Result View
+  if (processing.stage === 'complete' && finalResult) {
       return (
-          <div className="min-h-screen bg-gray-50 flex flex-col">
-              <header className="bg-indigo-900 text-white h-16 shrink-0 shadow-lg flex justify-between items-center px-6 sticky top-0 z-50">
-                <div className="flex items-center gap-4">
-                    <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center font-bold text-white">✓</div>
-                    <h1 className="text-xl font-bold tracking-tight">生成完成</h1>
-                </div>
-                <div className="flex gap-3">
-                    <button onClick={() => { setProcessing(prev => ({ ...prev, stage: 'idle' })); setFinalResult(null); }} className="text-gray-300 hover:text-white px-4 py-2 text-sm font-medium">返回编辑</button>
-                    <button onClick={downloadHtml} className="bg-green-500 hover:bg-green-400 text-white px-6 py-2 rounded-md text-sm font-bold shadow-md transition-all flex items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                        下载 HTML
-                    </button>
-                </div>
-              </header>
-              <div className="flex-1 overflow-auto py-8">
-                  <ArticlePreview fullText={markdownText} scenes={scenes} onResultReady={setFinalResult} onRegenerate={handleRegenerateScene} />
-              </div>
-              {showRateLimitModal && (
-                  <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center backdrop-blur-sm">
-                      <div className="bg-white text-gray-900 p-8 rounded-lg shadow-2xl max-w-md w-full">
-                          <h3 className="text-xl font-bold text-red-600 mb-4">API 配额耗尽 (重新生成)</h3>
-                          <p className="text-gray-600 mb-6">请输入新的 Key 以继续操作。</p>
-                          <input type="password" className="w-full border border-gray-300 rounded px-3 py-2 mb-4" placeholder="New API Key..." value={newKeyInput} onChange={e => setNewKeyInput(e.target.value)} />
-                          <div className="flex justify-end gap-2">
-                               <button onClick={() => setShowRateLimitModal(false)} className="px-3 py-1 text-gray-500">Cancel</button>
-                               <button onClick={() => { setCurrentApiKey(newKeyInput); setShowRateLimitModal(false); }} className="bg-indigo-600 text-white px-4 py-1 rounded">Update Key</button>
-                          </div>
-                      </div>
-                  </div>
-              )}
+          <div className="h-screen w-full bg-gray-100 flex flex-col">
+               <header className="bg-white shadow-sm h-16 shrink-0 flex justify-between items-center px-6 z-20">
+                    <div className="flex items-center gap-4">
+                        <button onClick={() => setProcessing(prev => ({ ...prev, stage: 'idle' }))} className="text-gray-500 hover:text-indigo-600 flex items-center gap-1 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" /></svg>
+                            <span>返回编辑</span>
+                        </button>
+                        <h2 className="text-lg font-bold text-gray-800">生成结果预览</h2>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => startProcessing(0)} className="text-gray-600 hover:text-indigo-600 px-3 py-2 text-sm font-medium transition-colors">
+                            🔄 全部重新生成
+                        </button>
+                        <button onClick={downloadHtml} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-md text-sm font-bold shadow-md flex items-center gap-2 transition-all transform hover:scale-105">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4-4m4 4h12" /></svg>
+                            下载 HTML
+                        </button>
+                    </div>
+               </header>
+               <div className="flex-1 overflow-auto p-4 md:p-8">
+                   <ArticlePreview 
+                        fullText={markdownText} 
+                        scenes={scenes} 
+                        onResultReady={setFinalResult}
+                        onRegenerate={handleRegenerateScene}
+                   />
+               </div>
           </div>
       );
   }
 
-  // 3. Loading View (Generating / Analyzing / Previewing)
-  return (
-    <div className="h-screen w-full bg-gray-900 text-white flex flex-col items-center justify-center p-8 relative overflow-hidden">
-      {showRateLimitModal && (
-          <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center backdrop-blur-sm">
-              <div className="bg-white text-gray-900 p-8 rounded-lg shadow-2xl max-w-md w-full animate-bounce-in">
-                  <div className="flex items-center gap-3 text-red-600 mb-4">
-                       <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                       <h3 className="text-xl font-bold">API 配额已耗尽 (429)</h3>
-                  </div>
-                  <p className="text-gray-600 mb-6">您的 Google AI 账户生图配额已用完。请更换一个新的 API Key 以继续生成，否则当前进度将停止。</p>
-                  <div className="mb-6">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">新的 Google AI API Key</label>
-                      <input type="password" className="w-full border border-gray-300 rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="粘贴新的 Key..." value={newKeyInput} onChange={e => setNewKeyInput(e.target.value)} />
-                  </div>
-                  <div className="flex justify-end gap-3">
-                      <button onClick={() => { setShowRateLimitModal(false); setProcessing(prev => ({...prev, stage: 'error', progressMessage: '已取消操作'})); }} className="px-4 py-2 text-gray-500 hover:text-gray-700">取消</button>
-                      <button onClick={handleResumeWithNewKey} disabled={!newKeyInput.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded shadow transition-colors">更换并继续生成</button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      <div className="absolute inset-0 z-0 opacity-20">
-        <div className="absolute top-0 -left-4 w-96 h-96 bg-purple-600 rounded-full mix-blend-multiply filter blur-3xl animate-blob"></div>
-        <div className="absolute top-0 -right-4 w-96 h-96 bg-yellow-600 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-2000"></div>
-        <div className="absolute -bottom-8 left-20 w-96 h-96 bg-pink-600 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-4000"></div>
-      </div>
-
-      <div className="z-10 text-center max-w-2xl w-full">
-        <div className="mb-10">
-          {loadingVideoSrc && !isVideoMissing ? (
-            <div className="mb-8 relative mx-auto w-64 aspect-square md:w-80 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-500/50 border-4 border-indigo-500/20 bg-black">
-                <video 
-                    src={loadingVideoSrc} 
-                    autoPlay 
-                    loop 
-                    muted 
-                    playsInline 
-                    className="w-full h-full object-cover"
-                    onError={() => { setIsVideoMissing(true); }}
-                    key={loadingVideoSrc} 
-                />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center mb-8">
-                <div className="w-20 h-20 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-lg shadow-indigo-500/50"></div>
-                {/* Fallback Message for missing video */}
-                <div className="text-xs text-indigo-300 bg-indigo-900/50 px-4 py-2 rounded-lg border border-indigo-500/30 max-w-xs">
-                   提示: 找不到 loading.mp4。请确保文件在 public 目录中。
-                </div>
-            </div>
-          )}
-          
-          <h2 className="text-4xl font-bold mb-4 tracking-tight">我知道你很急但是先别急</h2>
-          
-          {cooldownTime > 0 ? (
-             <div className="text-xl text-yellow-400 animate-pulse font-light">API 冷却中 (等待免费配额重置)... {cooldownTime}s</div>
-          ) : (
-             <p className="text-xl text-gray-300 animate-pulse font-light">{processing.progressMessage}</p>
-          )}
-        </div>
-
-        {processing.totalScenes > 0 && (
-            <div className="w-full bg-gray-800 rounded-full h-3 mb-4 overflow-hidden shadow-inner border border-gray-700">
-                <div className="bg-gradient-to-r from-indigo-500 to-purple-500 h-3 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]" style={{ width: `${Math.round((processing.completedScenes / processing.totalScenes) * 100)}%` }}></div>
-            </div>
-        )}
-        <div className="flex justify-between text-xs text-gray-500 uppercase tracking-widest font-semibold">
-            <span className={processing.stage === 'analyzing' ? 'text-indigo-400' : ''}>剧本分析</span>
-            <span className={processing.stage === 'generating' ? 'text-indigo-400' : ''}>视觉生成</span>
-            <span className={processing.stage === 'complete' ? 'text-indigo-400' : ''}>排版布局</span>
-        </div>
-      </div>
-    </div>
-  );
+  return null;
 };
 
 export default App;

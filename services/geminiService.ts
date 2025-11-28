@@ -149,9 +149,12 @@ const smartSanitizePrompt = (prompt: string): string => {
 };
 
 // Client-side image compression
-const compressImage = async (base64Str: string, maxSizeBytes: number, maxWidth: number): Promise<string> => {
+const compressImage = async (imageUrlOrBase64: string, maxSizeBytes: number, maxWidth: number): Promise<string> => {
     return new Promise((resolve) => {
         const img = new Image();
+        // Enable CORS for external images
+        img.crossOrigin = "Anonymous"; 
+        
         img.onload = () => {
             const canvas = document.createElement('canvas');
             let width = img.width;
@@ -168,41 +171,105 @@ const compressImage = async (base64Str: string, maxSizeBytes: number, maxWidth: 
 
             const ctx = canvas.getContext('2d');
             if (!ctx) {
-                resolve(base64Str); // Fail safe
+                resolve(imageUrlOrBase64); // Fail safe
                 return;
             }
             
             // Draw image to canvas
-            ctx.drawImage(img, 0, 0, width, height);
+            try {
+                ctx.drawImage(img, 0, 0, width, height);
 
-            // Iterative compression
-            // For higher quality targets (larger files), start higher
-            let quality = maxSizeBytes > 100 * 1024 ? 0.95 : 0.8;
-            let dataUrl = canvas.toDataURL('image/jpeg', quality);
-            
-            // Approximate size check (Base64 is ~1.33x binary size, so we multiply length by 0.75)
-            // Loop until size is acceptable or quality is too low (0.1)
-            while (dataUrl.length * 0.75 > maxSizeBytes && quality > 0.1) {
-                quality -= 0.1;
-                dataUrl = canvas.toDataURL('image/jpeg', quality);
+                // Iterative compression
+                let quality = maxSizeBytes > 100 * 1024 ? 0.95 : 0.8;
+                let dataUrl = canvas.toDataURL('image/jpeg', quality);
+                
+                while (dataUrl.length * 0.75 > maxSizeBytes && quality > 0.1) {
+                    quality -= 0.1;
+                    dataUrl = canvas.toDataURL('image/jpeg', quality);
+                }
+
+                resolve(dataUrl);
+            } catch (e) {
+                // Canvas tainted (CORS) or other error
+                console.warn("Compression failed (likely CORS), returning original URL", e);
+                resolve(imageUrlOrBase64);
             }
-
-            resolve(dataUrl);
         };
+        
         img.onerror = () => {
-            // If image loading fails, just return original
-            resolve(base64Str);
+            console.warn("Image load failed for compression, returning original");
+            resolve(imageUrlOrBase64);
         };
-        img.src = base64Str;
+        
+        img.src = imageUrlOrBase64;
     });
 };
 
-export const generateImageForScene = async (prompt: string, apiKey: string, sceneId: number, isRetry: boolean = false, attempt: number = 1, baseUrl?: string): Promise<string> => {
-  const ai = getAiClient(apiKey, baseUrl);
+// New function for OpenAI-compatible endpoints (like NewCoin)
+const generateImageViaOpenAICompat = async (prompt: string, apiKey: string, baseUrl: string, maxSizeBytes: number, maxWidth: number): Promise<string> => {
+    const url = `${baseUrl}/v1/chat/completions`;
+    
+    const payload = {
+        max_tokens: 4096,
+        model: "gemini-2.0-flash-exp-image-generation",
+        messages: [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: prompt
+                    }
+                ]
+            }
+        ]
+    };
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`NewCoin API Error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+        throw new Error("No content in NewCoin response");
+    }
+
+    // Extract URL from markdown or raw text
+    // Pattern 1: Markdown image ![alt](https://...)
+    // Pattern 2: Raw https://...
+    const urlMatch = content.match(/https?:\/\/[^\s)]+/);
+    
+    if (urlMatch && urlMatch[0]) {
+        // Compress potentially large external images
+        return await compressImage(urlMatch[0], maxSizeBytes, maxWidth);
+    } else {
+        throw new Error("No image URL found in response content");
+    }
+};
+
+export const generateImageForScene = async (
+    prompt: string, 
+    apiKey: string, 
+    sceneId: number, 
+    isRetry: boolean = false, 
+    attempt: number = 1, 
+    baseUrl: string = '',
+    apiProvider: 'official' | 'newcoin' | 'custom' = 'official'
+): Promise<string> => {
   
   // Determine compression targets based on Scene ID
-  // Scene 1 (Cover/Intro): High Quality (Max 300KB, 1280px width)
-  // Scenes 2-6: Lightweight (Max 50KB, 800px width)
   const isCover = sceneId === 1;
   const maxSizeBytes = isCover ? 300 * 1024 : 50 * 1024;
   const maxWidth = isCover ? 1280 : 800;
@@ -234,94 +301,95 @@ export const generateImageForScene = async (prompt: string, apiKey: string, scen
   const finalPrompt = `Cinematic photo of ${cleanPrompt}, Modern realistic style, detailed background, natural lighting.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: finalPrompt }] },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9",
-        },
-        safetySettings: [
-            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-        ]
-      }
-    });
-
-    const candidate = response.candidates?.[0];
+    // -------------------------------------------------------
+    // ROUTING LOGIC: Choose Provider
+    // -------------------------------------------------------
     
-    if (!candidate) {
-        throw new Error("No candidates returned (Potential Block)");
-    }
+    if (apiProvider === 'newcoin') {
+        // Use OpenAI Compatible endpoint for NewCoin
+        // Ensure we have a baseUrl, default to NewCoin's if empty (though App.tsx should handle this)
+        const targetUrl = baseUrl || 'https://api.newcoin.top';
+        return await generateImageViaOpenAICompat(finalPrompt, apiKey, targetUrl, maxSizeBytes, maxWidth);
+    } 
+    else {
+        // Use Standard Google SDK (Official or Custom Proxy compatible with Google Protocol)
+        const ai = getAiClient(apiKey, baseUrl);
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: { parts: [{ text: finalPrompt }] },
+          config: {
+            imageConfig: {
+              aspectRatio: "16:9",
+            },
+            safetySettings: [
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+            ]
+          }
+        });
 
-    // Check for Safety Blocks
-    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
-        const reason = candidate.finishReason;
-        const msg = `Image generation stopped. Reason: ${reason}`;
+        const candidate = response.candidates?.[0];
         
-        // RECURSIVE RETRY ON SAFETY FAILURE
-        // Checks for 'SAFETY', 'IMAGE_SAFETY', 'BLOCK', etc.
-        const isSafety = reason.includes('SAFETY') || reason === 'RECITATION' || reason === 'OTHER' || reason.includes('BLOCK');
-        
-        if (isSafety) {
-             if (!isRetry) {
-                 // Attempt 2: Try Sanitized Prompt
-                 console.warn(`Safety filter (${reason}) triggered. Retrying with sanitized prompt...`);
-                 return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
-             } else {
-                 // Attempt 3: Ultra Safe Fallback
-                 const ultraSafePrompt = "Abstract cinematic composition, soft lighting, asian style, emotional atmosphere, blurry background";
-                 
-                 // Avoid infinite loop if we are already using the ultra safe prompt
-                 if (!prompt.includes("Abstract cinematic composition")) {
-                    console.warn(`Sanitized prompt also failed (${reason}). Retrying with ULTRA SAFE fallback...`);
-                    return await generateImageForScene(ultraSafePrompt, apiKey, sceneId, true, 1, baseUrl);
+        if (!candidate) {
+            throw new Error("No candidates returned (Potential Block)");
+        }
+
+        // Check for Safety Blocks
+        if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+            const reason = candidate.finishReason;
+            const msg = `Image generation stopped. Reason: ${reason}`;
+            
+            const isSafety = reason.includes('SAFETY') || reason === 'RECITATION' || reason === 'OTHER' || reason.includes('BLOCK');
+            
+            if (isSafety) {
+                 if (!isRetry) {
+                     console.warn(`Safety filter (${reason}) triggered. Retrying with sanitized prompt...`);
+                     // Recursively call self with retry flag
+                     return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl, apiProvider);
+                 } else {
+                     const ultraSafePrompt = "Abstract cinematic composition, soft lighting, asian style, emotional atmosphere, blurry background";
+                     if (!prompt.includes("Abstract cinematic composition")) {
+                        console.warn(`Sanitized prompt also failed (${reason}). Retrying with ULTRA SAFE fallback...`);
+                        return await generateImageForScene(ultraSafePrompt, apiKey, sceneId, true, 1, baseUrl, apiProvider);
+                     }
                  }
-             }
+            }
+            throw new Error(msg);
+        }
+
+        const parts = candidate.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData && part.inlineData.data) {
+             const rawBase64 = `data:image/png;base64,${part.inlineData.data}`;
+             return await compressImage(rawBase64, maxSizeBytes, maxWidth);
+          }
         }
         
-        throw new Error(msg);
+        if (!isRetry) {
+             console.warn("No image data found. Retrying with sanitized prompt...");
+             return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl, apiProvider);
+        }
+        
+        throw new Error("No image data found in response");
     }
-
-    const parts = candidate.content?.parts || [];
-    for (const part of parts) {
-      if (part.inlineData && part.inlineData.data) {
-         const rawBase64 = `data:image/png;base64,${part.inlineData.data}`;
-         // Compress image before returning, passing specific limits
-         return await compressImage(rawBase64, maxSizeBytes, maxWidth);
-      }
-    }
-    
-    // Fallback: If no image data but we haven't retried yet
-    if (!isRetry) {
-         console.warn("No image data found. Retrying with sanitized prompt...");
-         return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
-    }
-    
-    throw new Error("No image data found in response");
 
   } catch (error: any) {
-    // RATE LIMIT HANDLING (429 / Resource Exhausted)
-    // We explicitly re-throw specific status codes so App.tsx can intercept them for Key Switching
-    // Note: Proxies might return 429 differently, but standard codes usually apply
+    // Rate limit handling
     if (error.status === 'RESOURCE_EXHAUSTED' || error.code === 429 || (error.message && error.message.includes('429'))) {
-        // With proxies, internal retry logic might be less effective if the key is truly out of credits
-        // But we keep the logic just in case it's a momentary spike
-        if (attempt <= 1) { // Reduced retries for proxy to allow faster key switching
-            console.warn(`Rate limit hit (429). Waiting before retry attempt ${attempt}...`);
-            // Immediate throw for UI handling to allow key switch, as proxies usually mean "out of money" on 429
+        if (attempt <= 1) { 
+            console.warn(`Rate limit hit (429). Throwing for key switch...`);
             const quotaError = new Error("QUOTA_EXCEEDED");
             (quotaError as any).code = 429;
             throw quotaError;
         }
     }
 
-    // Catch-all for permission or 400 errors that might be content related
+    // Catch-all for retries
     if (!isRetry && (error.message?.includes('SAFETY') || error.message?.includes('PERMISSION_DENIED') || error.message?.includes('400') || error.message?.includes('403'))) {
          console.warn("Safety/Permission/API error caught. Retrying with sanitized prompt...");
-         return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl);
+         return await generateImageForScene(prompt, apiKey, sceneId, true, 1, baseUrl, apiProvider);
     }
 
     console.error("Image generation failed:", error);
